@@ -45,6 +45,7 @@ use OCP\User\IProvidesExtendedSearchBackend;
 use OCP\User\IProvidesEMailBackend;
 use OCP\User\IProvidesQuotaBackend;
 use OCP\UserInterface;
+use OCP\Util\UserSearch;
 use Symfony\Component\EventDispatcher\GenericEvent;
 
 /**
@@ -82,22 +83,38 @@ class Manager extends PublicEmitter implements IUserManager {
 	private $syncService;
 
 	/**
+	 * @var UserSearch
+	 */
+	private $userSearch;
+
+	/**
 	 * @param IConfig $config
 	 * @param ILogger $logger
 	 * @param AccountMapper $accountMapper
 	 * @param SyncService $syncService
+	 * @param UserSearch $userSearch
 	 */
-	public function __construct(IConfig $config, ILogger $logger, AccountMapper $accountMapper, SyncService $syncService) {
+	public function __construct(
+		IConfig $config,
+		ILogger $logger,
+		AccountMapper $accountMapper,
+		SyncService $syncService,
+		UserSearch $userSearch
+	) {
 		$this->config = $config;
 		$this->logger = $logger;
 		$this->accountMapper = $accountMapper;
 		$this->cachedUsers = new CappedMemoryCache();
 		$this->syncService = $syncService;
+		$this->userSearch = $userSearch;
 		$cachedUsers = &$this->cachedUsers;
-		$this->listen('\OC\User', 'postDelete', function ($user) use (&$cachedUsers) {
-			/** @var \OC\User\User $user */
-			unset($cachedUsers[$user->getUID()]);
-		});
+		$this->listen(
+			'\OC\User', 'postDelete',
+			function ($user) use (&$cachedUsers) {
+				/** @var \OC\User\User $user */
+				unset($cachedUsers[$user->getUID()]);
+			}
+		);
 	}
 
 	/**
@@ -248,7 +265,7 @@ class Manager extends PublicEmitter implements IUserManager {
 	public function search($pattern, $limit = null, $offset = null) {
 		$accounts = $this->accountMapper->search('user_id', $pattern, $limit, $offset);
 		$users = [];
-		if ($this->isSearcheable($pattern)) {
+		if ($this->userSearch->isSearchable($pattern)) {
 			foreach ($accounts as $account) {
 				$user = $this->getUserObject($account);
 				$users[$user->getUID()] = $user;
@@ -269,7 +286,7 @@ class Manager extends PublicEmitter implements IUserManager {
 	public function find($pattern, $limit = null, $offset = null) {
 		$accounts = $this->accountMapper->find($pattern, $limit, $offset);
 		$users = [];
-		if ($this->isSearcheable($pattern)) {
+		if ($this->userSearch->isSearchable($pattern)) {
 			foreach ($accounts as $account) {
 				$user = $this->getUserObject($account);
 				$users[$user->getUID()] = $user;
@@ -287,7 +304,7 @@ class Manager extends PublicEmitter implements IUserManager {
 	 * @return \OC\User\User[]
 	 */
 	public function searchDisplayName($pattern, $limit = null, $offset = null) {
-		if ($this->isSearcheable($pattern)) {
+		if ($this->userSearch->isSearchable($pattern)) {
 			$accounts = $this->accountMapper->search('display_name', $pattern, $limit, $offset);
 			return array_map(function(Account $account) {
 				return $this->getUserObject($account);
@@ -295,19 +312,6 @@ class Manager extends PublicEmitter implements IUserManager {
 
 		}
 		return [];
-	}
-
-	/**
-	 * @param string $pattern
-	 * @return bool
-	 */
-	public function isSearcheable($pattern) {
-		$trimmed = trim($pattern);
-		return $trimmed === '' || strlen($trimmed) >= $this->getSearchMinLength();
-	}
-
-	public function getSearchMinLength() {
-		return $this->config->getSystemValue('user.search_min_length', 4);
 	}
 
 	/**
